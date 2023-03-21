@@ -1,3 +1,4 @@
+import base64
 from hubspot import HubSpot
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view
@@ -7,6 +8,10 @@ from .serializers import DataSourceSerializer
 from entry_group_project.local_settings import *
 import requests, json
 from base64 import b64encode
+from django.http import JsonResponse
+from django_cron import CronJobBase, Schedule
+import time, datetime, schedule
+
 # from .models import DataSource
 
 @api_view(['GET'])
@@ -22,7 +27,7 @@ def get_hubspot_info(request):
         "leads" : leads_serializer.data
     }
 
-    return Response(custom_response)
+    return JsonResponse(custom_response)
 
 @api_view(['GET'])
 def get_axcelerate_info(request):
@@ -131,65 +136,66 @@ def get_xero_info(request):
 
 @api_view(['GET'])
 def get_eway_info(request):
-    # Define the eWay API endpoint URLs
-    base_url = "https://api.ewaypayments.com"
-    token_url = f"{base_url}/oauth/token"
+   
+    bpg_username = bpg_username_login
+    bpg_password = bpg_password_login
+    bpg_api_key = bpg_eway_key
+    bpg_api_password = bpg_eway_password
+    mrt_username = mrt_username_login
+    mrt_password = mrt_password_login
+    mrt_api_key = mrt_eway_key
+    mrt_api_password = mrt_eway_password
+    
+    current_date = datetime.date.today()
 
-    # Define your eWay API credentials
-    client_id = "" 
-    client_secret = ""
-    username = "your_username"
-    password = "your_password"
+    bpg_endpoint = "https://api.ewaypayments.com/transactions"
+    mrt_endpoint = "https://api.ewaypayments.com/transactions"
 
-    # Define the OAuth2 authentication parameters
-    auth_data = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "grant_type": "password",
-        "username": username,
-        "password": password
+    bpg_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Basic " + base64.b64encode(f"{bpg_api_key}:{bpg_api_password}".encode()).decode(),
+    }
+    bpg_params = {
+        "UserName": bpg_username,
+        "Password": bpg_password,
+        "TransactionType": "Purchase,MOTO,Recurring",
+        "IncludeDetail": True,
+        "StartDate": str(current_date),
+        "EndDate": str(current_date)
+    }
+    mrt_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Basic " + base64.b64encode(f"{mrt_api_key}:{mrt_api_password}".encode()).decode(),
+    }
+    mrt_params = {
+        "UserName": mrt_username,
+        "Password": mrt_password,
+        "TransactionType": "Purchase,MOTO,Recurring",
+        "IncludeDetail": True,
+        "StartDate": str(current_date),
+        "EndDate": str(current_date)
     }
 
-    # Send a POST request to the token endpoint with the auth data to get the access token
-    response = requests.post(token_url, data=auth_data)
+    bpg_response = requests.get(bpg_endpoint, headers=bpg_headers, params=bpg_params)
+    bpg_response.raise_for_status()
+    bpg_transactions = json.loads(bpg_response.text)
 
-    # Check the status code of the response to ensure that the request was successful
-    if response.status_code == 200:
-        # If the request was successful, extract the access token from the response JSON
-        access_token = response.json()["access_token"]
-        print("Access token:", access_token)
-        
-        # Define the API endpoint URL for making GET requests to the eWay API
-        api_url = f"{base_url}/Transaction"
+    mrt_response = requests.get(mrt_endpoint, headers=mrt_headers, params=mrt_params)
+    mrt_response.raise_for_status()
+    mrt_transactions = json.loads(mrt_response.text)
 
-        # Define the headers with the access token and content type
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
-        }
+    return JsonResponse({"bpg_transactions": bpg_transactions, "mrt_transactions": mrt_transactions})
 
-        # Define the query parameters for the API request
-        params = {
-            "TransactionType": "Purchase"
-        }
+def job(request):
+    result = get_eway_info()
+    return result
 
-        # Send a GET request to the API endpoint with the headers and params to get the transactions
-        response = requests.get(api_url, headers=headers, params=params)
+schedule.every(6).hours.do(job)
 
-        # Check the status code of the response to ensure that the request was successful
-        if response.status_code == 200:
-            # If the request was successful, extract the transactions from the response JSON
-            transactions = response.json()["Transactions"]
-            print(f"Retrieved {len(transactions)} transactions:")
-            for transaction in transactions:
-                print(json.dumps(transaction, indent=4))
-        else:
-            # If the request failed, print the error message
-            error_message = response.json()["Errors"][0]["Message"]
-            print(f"Failed to get transactions. Error message: {error_message}")
-    else:
-        # If the request failed, print the error message
-        error_message = response.json()["error_description"]
-        print(f"Failed to authenticate. Error message: {error_message}")
+while True:
+    schedule.run_pending()
+    time.sleep(1)
 
-    return transactions
+
